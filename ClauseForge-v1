@@ -1,0 +1,158 @@
+# clauseforge_monolith.py — Full App in One File
+# Author: Caleb (sevends90-stack)
+# License: Apache 2.0
+# Purpose: Clause templating engine with audit interface
+
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import Response
+from typing import List
+from datetime import datetime
+import os
+import uvicorn
+
+app = FastAPI(title="ClauseForge", version="1.0.0")
+
+# === Setup ===
+os.makedirs("static", exist_ok=True)
+os.makedirs("templates", exist_ok=True)
+
+with open("static/style.css", "w") as f:
+    f.write("""
+body { font-family: sans-serif; padding: 2rem; background: #f9f9f9; }
+h2 { color: #333; }
+input, select, button { margin: 0.5rem; padding: 0.5rem; }
+.template { background: #fff; padding: 1rem; margin-bottom: 1rem; border: 1px solid #ccc; }
+""")
+
+with open("templates/index.html", "w") as f:
+    f.write("""
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ClauseForge</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h2>ClauseForge Template Builder</h2>
+  <form method="post" action="/submit">
+    <input type="text" name="title" placeholder="Template Title" required><br><br>
+    <div id="clauses">
+      <div class="clause">
+        <input type="text" name="clause_texts" placeholder="Clause Text" required>
+        <input type="text" name="clause_categories" placeholder="Category" required>
+        <select name="clause_required">
+          <option value="false">Optional</option>
+          <option value="true">Required</option>
+        </select>
+      </div>
+    </div>
+    <button type="button" onclick="addClause()">Add Clause</button>
+    <button type="submit">Submit Template</button>
+  </form>
+  <script>
+    function addClause() {
+      const div = document.createElement('div');
+      div.className = 'clause';
+      div.innerHTML = `
+        <input type="text" name="clause_texts" placeholder="Clause Text" required>
+        <input type="text" name="clause_categories" placeholder="Category" required>
+        <select name="clause_required">
+          <option value="false">Optional</option>
+          <option value="true">Required</option>
+        </select>
+      `;
+      document.getElementById('clauses').appendChild(div);
+    }
+  </script>
+</body>
+</html>
+""")
+
+with open("templates/templates.html", "w") as f:
+    f.write("""
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ClauseForge Templates</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h2>Stored Templates</h2>
+  {% for template in templates %}
+    <div class="template">
+      <h3>{{ template.title }}</h3>
+      <p><strong>Timestamp:</strong> {{ template.timestamp }}</p>
+      <ul>
+        {% for clause in template.clauses %}
+          <li>
+            <strong>{{ clause.category }}</strong>: {{ clause.text }}
+            {% if clause.required %}(Required){% else %}(Optional){% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endfor %}
+</body>
+</html>
+""")
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# === In-memory store ===
+templates_db = []
+
+# === Routes ===
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.post("/submit", response_class=HTMLResponse)
+def submit_template(
+    request: Request,
+    title: str = Form(...),
+    clause_texts: List[str] = Form(...),
+    clause_categories: List[str] = Form(...),
+    clause_required: List[str] = Form(...)
+):
+    clauses = []
+    for i in range(len(clause_texts)):
+        clauses.append({
+            "id": i + 1,
+            "text": clause_texts[i],
+            "category": clause_categories[i],
+            "required": clause_required[i] == "true"
+        })
+
+    template = {
+        "title": title,
+        "clauses": clauses,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+    templates_db.append(template)
+    return RedirectResponse(url="/templates", status_code=303)
+
+@app.get("/templates", response_class=HTMLResponse)
+def view_templates(request: Request):
+    return templates.TemplateResponse("templates.html", {"request": request, "templates": templates_db})
+
+@app.get("/ping")
+def ping():
+    return {"status": "ClauseForge active", "timestamp": datetime.utcnow().isoformat()}
+
+# === Run ===
+if __name__ == "__main__":
+    uvicorn.run("clauseforge_monolith:app", host="0.0.0.0", port=8080, reload=True)
